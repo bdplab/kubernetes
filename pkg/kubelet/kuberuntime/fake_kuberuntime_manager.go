@@ -105,6 +105,7 @@ func NewFakeKubeRuntimeManager(runtimeService internalapi.RuntimeService, imageS
 		&fakeHTTP{},
 		kubeRuntimeManager,
 		kubeRuntimeManager)
+	kubeRuntimeManager.hostPortAllocator = NewHostPortAllocator("AF4:1025-1027,BE:20000-20002", NewFakeSocketManager().openFakeSocket)
 
 	return kubeRuntimeManager, nil
 }

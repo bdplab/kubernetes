@@ -39,6 +39,9 @@ func (f *FakeRuntimeHelper) GenerateRunContainerOptions(pod *v1.Pod, container *
 	if len(container.TerminationMessagePath) != 0 {
 		opts.PodContainerDir = f.PodContainerDir
 	}
+	for _, env := range(container.Env) {
+		opts.Envs = append(opts.Envs, kubecontainer.EnvVar{Name: env.Name, Value: env.Value})
+	}
 	return &opts, nil
 }
 

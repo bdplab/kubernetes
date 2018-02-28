@@ -264,6 +264,8 @@ type KubeletConfiguration struct {
 	FeatureGates map[string]bool
 	// Tells the Kubelet to fail to start if swap is enabled on the node.
 	FailSwapOn bool
+	// Tells the Kubelet the host ports reserved for allocation dynamically.
+	HostPortsReservation string
 
 	/* following flags are meant for Node Allocatable */
 

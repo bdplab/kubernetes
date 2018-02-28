@@ -143,7 +143,7 @@ func makeFakeContainer(t *testing.T, m *kubeGenericRuntimeManager, template cont
 	sandboxConfig, err := m.generatePodSandboxConfig(template.pod, template.sandboxAttempt)
 	assert.NoError(t, err, "generatePodSandboxConfig for container template %+v", template)
 
-	containerConfig, err := m.generateContainerConfig(template.container, template.pod, template.attempt, "", template.container.Image)
+	containerConfig, err := m.generateContainerConfig(template.container, template.pod, template.attempt, "", template.container.Image, nil)
 	assert.NoError(t, err, "generateContainerConfig for container template %+v", template)
 
 	podSandboxID := apitest.BuildSandboxName(sandboxConfig.Metadata)
@@ -542,6 +542,123 @@ func TestKillPod(t *testing.T) {
 	}
 	for _, c := range fakeRuntime.Containers {
 		assert.Equal(t, runtimeapi.ContainerState_CONTAINER_EXITED, c.State)
+	}
+}
+
+func TestSyncPodWithHostPortAllocation(t *testing.T) {
+	fakeRuntime, fakeImage, m, err := createTestRuntimeManager()
+	assert.NoError(t, err)
+
+	containers := []v1.Container{
+		{
+			Name:            "foo1",
+			Image:           "busybox",
+			ImagePullPolicy: v1.PullIfNotPresent,
+			Env: []v1.EnvVar {
+				{Name: "PORTALLOC_TCP_port1", Value: "BE"},
+			},
+		},
+		{
+			Name:            "foo2",
+			Image:           "alpine",
+			ImagePullPolicy: v1.PullIfNotPresent,
+			Env: []v1.EnvVar {
+				{Name: "PORTALLOC_TCP_port2", Value: "BE"},
+			},
+		},
+	}
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:       "12345678",
+			Name:      "foo",
+			Namespace: "new",
+		},
+		Spec: v1.PodSpec{
+			HostNetwork: true,
+			Containers: containers,
+		},
+	}
+
+	backOff := flowcontrol.NewBackOff(time.Second, time.Minute)
+	result := m.SyncPod(pod, v1.PodStatus{}, &kubecontainer.PodStatus{}, []v1.Secret{}, backOff)
+	assert.NoError(t, result.Error())
+	assert.Equal(t, 2, len(fakeRuntime.Containers))
+	assert.Equal(t, 2, len(fakeImage.Images))
+	assert.Equal(t, 1, len(fakeRuntime.Sandboxes))
+	for _, sandbox := range fakeRuntime.Sandboxes {
+		assert.Equal(t, runtimeapi.PodSandboxState_SANDBOX_READY, sandbox.State)
+	}
+
+	allAllocatedHostPorts := []containerHostPort{}
+	for _, c := range fakeRuntime.Containers {
+		assert.Equal(t, runtimeapi.ContainerState_CONTAINER_RUNNING, c.State)
+		annotatedInfo := getContainerInfoFromAnnotations(c.GetAnnotations())
+		assert.Empty(t, annotatedInfo.ContainerPorts)
+		allocatedHostPorts := make(map[string]containerHostPort)
+		found, err := getJSONObjectFromLabel(c.GetAnnotations(), kAllocatedHostPortAnnotationLabel, &allocatedHostPorts)
+		require.True(t, found, "Not find annotation %q for container %q", kAllocatedHostPortAnnotationLabel, c.Id)
+		require.Empty(t, err, "Fail to parse annotation %q for container %q", kAllocatedHostPortAnnotationLabel, c.Id)
+		// Check that the host port is allocated.
+		require.Equal(t, 1, len(allocatedHostPorts))
+		var hostPort containerHostPort
+		for _, port := range(allocatedHostPorts) {
+			hostPort = port
+			break
+		}
+		assert.True(t, hostPort.Port > 0)
+		allAllocatedHostPorts = append(allAllocatedHostPorts, hostPort)
+		assert.True(t, m.hostPortAllocator.isPortAllocated(hostPort), "Port %v should be allocated.", hostPort)
+	}
+
+	// Convert the fakeContainers to kubecontainer.Container
+	kubeContainers := make([]*kubecontainer.Container, 0, len(fakeRuntime.Containers))
+	for _, fakeContainer := range(fakeRuntime.Containers) {
+		c, err := m.toKubeContainer(&runtimeapi.Container{
+			Id:       fakeContainer.Id,
+			Metadata: fakeContainer.Metadata,
+			State:    fakeContainer.State,
+			Image:    fakeContainer.Image,
+			ImageRef: fakeContainer.ImageRef,
+			Labels:   fakeContainer.Labels,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		kubeContainers = append(kubeContainers, c)
+	}
+	var sandboxId string
+	for _, sandbox := range(fakeRuntime.Sandboxes) {
+		sandboxId = sandbox.Id
+		break
+	}
+	runningPod := kubecontainer.Pod{
+		ID:         pod.UID,
+		Name:       pod.Name,
+		Namespace:  pod.Namespace,
+		Containers: []*kubecontainer.Container{kubeContainers[0], kubeContainers[1]},
+		Sandboxes: []*kubecontainer.Container{
+			{
+				ID: kubecontainer.ContainerID{
+					ID:   sandboxId,
+					Type: apitest.FakeRuntimeName,
+				},
+			},
+		},
+	}
+
+	// Now kill the pod, which should release the bound host ports.
+	err = m.KillPod(pod, runningPod, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(fakeRuntime.Containers))
+	assert.Equal(t, 1, len(fakeRuntime.Sandboxes))
+	for _, sandbox := range fakeRuntime.Sandboxes {
+		assert.Equal(t, runtimeapi.PodSandboxState_SANDBOX_NOTREADY, sandbox.State)
+	}
+	for _, c := range fakeRuntime.Containers {
+		assert.Equal(t, runtimeapi.ContainerState_CONTAINER_EXITED, c.State)
+	}
+	for _, hostPort := range allAllocatedHostPorts {
+		assert.False(t, m.hostPortAllocator.isPortAllocated(hostPort), "Host port %v should not be allocated", hostPort)
 	}
 }
 

@@ -116,6 +116,9 @@ type kubeGenericRuntimeManager struct {
 
 	// A shim to legacy functions for backward compatibility.
 	legacyLogProvider LegacyLogProvider
+
+	// The host port allocation manager.
+	hostPortAllocator *HostPortAllocator
 }
 
 type KubeGenericRuntime interface {
@@ -150,6 +153,7 @@ func NewKubeGenericRuntimeManager(
 	imageService internalapi.ImageManagerService,
 	internalLifecycle cm.InternalContainerLifecycle,
 	legacyLogProvider LegacyLogProvider,
+	hostPortAllocator *HostPortAllocator,
 ) (KubeGenericRuntime, error) {
 	kubeRuntimeManager := &kubeGenericRuntimeManager{
 		recorder:            recorder,
@@ -213,6 +217,18 @@ func NewKubeGenericRuntimeManager(
 		},
 		versionCacheTTL,
 	)
+
+	if hostPortAllocator == nil {
+		return nil, fmt.Errorf("HostPortAllocator is not provided")
+	}
+	runningContainers, err := kubeRuntimeManager.getKubeletContainers(false)
+	if err != nil {
+		runningContainers = nil
+	}
+	if err := hostPortAllocator.Init(runningContainers); err != nil {
+		return nil, fmt.Errorf("Failed to initialize host port allocator")
+	}
+	kubeRuntimeManager.hostPortAllocator = hostPortAllocator
 
 	return kubeRuntimeManager, nil
 }
@@ -502,6 +518,10 @@ func (m *kubeGenericRuntimeManager) computePodActions(pod *v1.Pod, podStatus *ku
 		if containerStatus != nil && containerStatus.State != kubecontainer.ContainerStateRunning {
 			if err := m.internalLifecycle.PostStopContainer(containerStatus.ID.ID); err != nil {
 				glog.Errorf("internal container post-stop lifecycle hook failed for container %v in pod %v with error %v",
+					container.Name, pod.Name, err)
+			}
+			if err := m.hostPortAllocator.ReleasePortsForContainer(pod, container.Name); err != nil {
+				glog.Errorf("Failed to release allocated host ports for container %v in pod %v with error %v",
 					container.Name, pod.Name, err)
 			}
 		}
