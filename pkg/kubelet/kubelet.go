@@ -676,6 +676,11 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 			return nil, err
 		}
 		klet.runtimeService = runtimeService
+		// Use the default local port opener
+		hostPortAllocator := kuberuntime.NewHostPortAllocator(kubeCfg.HostPortsReservation, nil)
+		if hostPortAllocator == nil {
+			return nil, fmt.Errorf("Failed to create a host port allocator.")
+		}
 		runtime, err := kuberuntime.NewKubeGenericRuntimeManager(
 			kubecontainer.FilterEventRecorder(kubeDeps.Recorder),
 			klet.livenessManager,
@@ -695,6 +700,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 			imageService,
 			kubeDeps.ContainerManager.InternalContainerLifecycle(),
 			legacyLogProvider,
+			hostPortAllocator,
 		)
 		if err != nil {
 			return nil, err

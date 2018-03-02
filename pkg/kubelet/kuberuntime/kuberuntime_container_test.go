@@ -259,7 +259,7 @@ func TestGenerateContainerConfig(t *testing.T) {
 	}
 
 	expectedConfig := makeExpectedConfig(m, pod, 0)
-	containerConfig, err := m.generateContainerConfig(&pod.Spec.Containers[0], pod, 0, "", pod.Spec.Containers[0].Image)
+	containerConfig, err := m.generateContainerConfig(&pod.Spec.Containers[0], pod, 0, "", pod.Spec.Containers[0].Image, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedConfig, containerConfig, "generate container config for kubelet runtime v1.")
 
@@ -288,7 +288,7 @@ func TestGenerateContainerConfig(t *testing.T) {
 		},
 	}
 
-	_, err = m.generateContainerConfig(&podWithContainerSecurityContext.Spec.Containers[0], podWithContainerSecurityContext, 0, "", podWithContainerSecurityContext.Spec.Containers[0].Image)
+	_, err = m.generateContainerConfig(&podWithContainerSecurityContext.Spec.Containers[0], podWithContainerSecurityContext, 0, "", podWithContainerSecurityContext.Spec.Containers[0].Image, nil)
 	assert.Error(t, err)
 
 	imageId, _ := imageService.PullImage(&runtimeapi.ImageSpec{Image: "busybox"}, nil)
@@ -300,7 +300,7 @@ func TestGenerateContainerConfig(t *testing.T) {
 	podWithContainerSecurityContext.Spec.Containers[0].SecurityContext.RunAsUser = nil
 	podWithContainerSecurityContext.Spec.Containers[0].SecurityContext.RunAsNonRoot = &runAsNonRootTrue
 
-	_, err = m.generateContainerConfig(&podWithContainerSecurityContext.Spec.Containers[0], podWithContainerSecurityContext, 0, "", podWithContainerSecurityContext.Spec.Containers[0].Image)
+	_, err = m.generateContainerConfig(&podWithContainerSecurityContext.Spec.Containers[0], podWithContainerSecurityContext, 0, "", podWithContainerSecurityContext.Spec.Containers[0].Image, nil)
 	assert.Error(t, err, "RunAsNonRoot should fail for non-numeric username")
 }
 

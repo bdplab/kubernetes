@@ -179,6 +179,7 @@ var (
 		"HostIPCSources[*]",
 		"HostNetworkSources[*]",
 		"HostPIDSources[*]",
+		"HostPortsReservation",
 		"IPTablesDropBit",
 		"IPTablesMasqueradeBit",
 		"ImageGCHighThresholdPercent",

@@ -259,6 +259,8 @@ type KubeletConfiguration struct {
 	FeatureGates map[string]bool `json:"featureGates,omitempty"`
 	// Tells the Kubelet to fail to start if swap is enabled on the node.
 	FailSwapOn bool `json:"failSwapOn,omitempty"`
+	// Tells the Kubelet the host ports reserved for allocation dynamically.
+	HostPortsReservation string `json:"hostPortsReservation,omitempty"`
 
 	/* following flags are meant for Node Allocatable */
 

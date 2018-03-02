@@ -50,6 +50,7 @@ import (
 )
 
 var (
+	ErrAllocateHostPorts = errors.New("AllocateHostPortsError")
 	ErrCreateContainerConfig = errors.New("CreateContainerConfigError")
 	ErrCreateContainer       = errors.New("CreateContainerError")
 	ErrPostStartHook         = errors.New("PostStartHookError")
@@ -107,11 +108,25 @@ func (m *kubeGenericRuntimeManager) startContainer(podSandboxID string, podSandb
 		restartCount = containerStatus.RestartCount + 1
 	}
 
-	containerConfig, err := m.generateContainerConfig(container, pod, restartCount, podIP, imageRef)
+	// Try to allocate the host ports for the container when configured so.
+	hostPortsAllocation, err := m.hostPortAllocator.AllocatePortsForContainer(pod, container)
+	portsAllocationCommitted := false
+	defer func() {
+		if !portsAllocationCommitted {
+			m.hostPortAllocator.ReleasePortsForContainer(pod, container.Name)
+		}
+	}()
+	if err != nil {
+		m.recordContainerEvent(pod, container, "", v1.EventTypeWarning, events.FailedToCreateContainer, "Error: %v", grpc.ErrorDesc(err))
+		return grpc.ErrorDesc(err), ErrAllocateHostPorts
+	}
+
+	containerConfig, err := m.generateContainerConfig(container, pod, restartCount, podIP, imageRef, hostPortsAllocation)
 	if err != nil {
 		m.recordContainerEvent(pod, container, "", v1.EventTypeWarning, events.FailedToCreateContainer, "Error: %v", grpc.ErrorDesc(err))
 		return grpc.ErrorDesc(err), ErrCreateContainerConfig
 	}
+
 	containerID, err := m.runtimeService.CreateContainer(podSandboxID, containerConfig, podSandboxConfig)
 	if err != nil {
 		m.recordContainerEvent(pod, container, containerID, v1.EventTypeWarning, events.FailedToCreateContainer, "Error: %v", grpc.ErrorDesc(err))
@@ -137,6 +152,7 @@ func (m *kubeGenericRuntimeManager) startContainer(podSandboxID string, podSandb
 		m.recordContainerEvent(pod, container, containerID, v1.EventTypeWarning, events.FailedToStartContainer, "Error: %v", grpc.ErrorDesc(err))
 		return grpc.ErrorDesc(err), kubecontainer.ErrRunContainer
 	}
+	portsAllocationCommitted = true
 	m.recordContainerEvent(pod, container, containerID, v1.EventTypeNormal, events.StartedContainer, "Started container")
 
 	// Symlink container logs to the legacy container log location for cluster logging
@@ -173,11 +189,12 @@ func (m *kubeGenericRuntimeManager) startContainer(podSandboxID string, podSandb
 }
 
 // generateContainerConfig generates container config for kubelet runtime v1.
-func (m *kubeGenericRuntimeManager) generateContainerConfig(container *v1.Container, pod *v1.Pod, restartCount int, podIP, imageRef string) (*runtimeapi.ContainerConfig, error) {
+func (m *kubeGenericRuntimeManager) generateContainerConfig(container *v1.Container, pod *v1.Pod, restartCount int, podIP, imageRef string, hostPortsAllocation map[string]containerHostPort) (*runtimeapi.ContainerConfig, error) {
 	opts, err := m.runtimeHelper.GenerateRunContainerOptions(pod, container, podIP)
 	if err != nil {
 		return nil, err
 	}
+	hostportAnnotationKey, hostportAnnotationValue := MaybeUpdateContainerOptions(hostPortsAllocation, container.Name, opts.Envs)
 
 	uid, username, err := m.getImageUser(container.Image)
 	if err != nil {
@@ -210,6 +227,9 @@ func (m *kubeGenericRuntimeManager) generateContainerConfig(container *v1.Contai
 		StdinOnce:   container.StdinOnce,
 		Tty:         container.TTY,
 		Linux:       m.generateLinuxContainerConfig(container, pod, uid, username),
+	}
+	if len(hostportAnnotationKey) > 0 && len(hostportAnnotationValue) > 0 {
+		config.Annotations[hostportAnnotationKey] = hostportAnnotationValue
 	}
 
 	// set environment variables
@@ -600,6 +620,12 @@ func (m *kubeGenericRuntimeManager) killContainer(pod *v1.Pod, containerID kubec
 		glog.Errorf("Container %q termination failed with gracePeriod %d: %v", containerID.String(), gracePeriod, err)
 	} else {
 		glog.V(3).Infof("Container %q exited normally", containerID.String())
+	}
+
+	if error := m.hostPortAllocator.ReleasePortsForContainer(pod, containerName); error != nil {
+		glog.Errorf("Failed to release allocated host ports for container %q", containerID.String())
+	} else {
+		glog.V(1).Infof("Released the allocated host ports for container %q", containerID.String())
 	}
 
 	message := fmt.Sprintf("Killing container with id %s", containerID.String())
